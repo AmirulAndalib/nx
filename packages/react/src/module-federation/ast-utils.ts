@@ -2,9 +2,9 @@ import * as ts from 'typescript';
 import { ChangeType, StringChange } from '@nrwl/devkit';
 import { findNodes } from 'nx/src/utils/typescript';
 import {
-  addImport,
   findClosestOpening,
   findElements,
+  addImport,
 } from '../utils/ast-utils';
 
 export function addRemoteToConfig(
