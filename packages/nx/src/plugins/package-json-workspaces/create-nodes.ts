@@ -10,8 +10,9 @@ import { combineGlobPatterns } from '../../utils/globs';
 import { NX_PREFIX } from '../../utils/logger';
 import { output } from '../../utils/output';
 import {
-  PackageJson,
   getMetadataFromPackageJson,
+  PackageJson,
+  getTagsFromPackageJson,
   readTargetsFromPackageJson,
 } from '../../utils/package-json';
 import { joinPathFragments } from '../../utils/path';
@@ -68,12 +69,16 @@ export function buildPackageJsonWorkspacesMatcher(
     negativePatterns.every((negative) => minimatch(p, negative));
 }
 
-export function createNodeFromPackageJson(pkgJsonPath: string, root: string) {
-  const json: PackageJson = readJsonFile(join(root, pkgJsonPath));
+export function createNodeFromPackageJson(
+  pkgJsonPath: string,
+  workspaceRoot: string
+) {
+  const json: PackageJson = readJsonFile(join(workspaceRoot, pkgJsonPath));
   const project = buildProjectConfigurationFromPackageJson(
     json,
+    workspaceRoot,
     pkgJsonPath,
-    readNxJson(root)
+    readNxJson(workspaceRoot)
   );
   return {
     projects: {
@@ -84,35 +89,55 @@ export function createNodeFromPackageJson(pkgJsonPath: string, root: string) {
 
 export function buildProjectConfigurationFromPackageJson(
   packageJson: PackageJson,
-  path: string,
+  workspaceRoot: string,
+  packageJsonPath: string,
   nxJson: NxJsonConfiguration
 ): ProjectConfiguration & { name: string } {
-  const normalizedPath = path.split('\\').join('/');
-  const directory = dirname(normalizedPath);
+  const normalizedPath = packageJsonPath.split('\\').join('/');
+  const projectRoot = dirname(normalizedPath);
 
-  if (!packageJson.name && directory === '.') {
+  const siblingProjectJson = tryReadJson<ProjectConfiguration>(
+    join(workspaceRoot, projectRoot, 'project.json')
+  );
+
+  if (siblingProjectJson) {
+    for (const target of Object.keys(siblingProjectJson?.targets ?? {})) {
+      delete packageJson.scripts?.[target];
+    }
+  }
+
+  if (!packageJson.name && projectRoot === '.') {
     throw new Error(
       'Nx requires the root package.json to specify a name if it is being used as an Nx project.'
     );
   }
 
   let name = packageJson.name ?? toProjectName(normalizedPath);
-  const projectType =
-    nxJson?.workspaceLayout?.appsDir != nxJson?.workspaceLayout?.libsDir &&
-    nxJson?.workspaceLayout?.appsDir &&
-    directory.startsWith(nxJson.workspaceLayout.appsDir)
-      ? 'application'
-      : 'library';
 
-  return {
-    root: directory,
-    sourceRoot: directory,
+  const projectConfiguration: ProjectConfiguration & { name: string } = {
+    root: projectRoot,
+    sourceRoot: projectRoot,
     name,
-    projectType,
     ...packageJson.nx,
     targets: readTargetsFromPackageJson(packageJson),
+    tags: getTagsFromPackageJson(packageJson),
     metadata: getMetadataFromPackageJson(packageJson),
   };
+
+  if (
+    nxJson?.workspaceLayout?.appsDir != nxJson?.workspaceLayout?.libsDir &&
+    nxJson?.workspaceLayout?.appsDir &&
+    projectRoot.startsWith(nxJson.workspaceLayout.appsDir)
+  ) {
+    projectConfiguration.projectType = 'application';
+  } else if (
+    typeof nxJson?.workspaceLayout?.libsDir !== 'undefined' &&
+    projectRoot.startsWith(nxJson.workspaceLayout.libsDir)
+  ) {
+    projectConfiguration.projectType = 'library';
+  }
+
+  return projectConfiguration;
 }
 
 /**
@@ -184,4 +209,12 @@ function normalizePatterns(patterns: string[]): string[] {
 
 function removeRelativePath(pattern: string): string {
   return pattern.startsWith('./') ? pattern.substring(2) : pattern;
+}
+
+function tryReadJson<T extends Object = any>(path: string): T | null {
+  try {
+    return readJsonFile<T>(path);
+  } catch {
+    return null;
+  }
 }
